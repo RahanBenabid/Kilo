@@ -63,6 +63,8 @@ struct termios orig_termios;
 struct editorConfig {
   // coordinates of the cursor
   int cx, cy;
+  // for scrolling, init ar 0 which means we'll start at the top of the file
+  int rowoff;
   int screenrows;
   int screencols;
   int numrows;
@@ -374,10 +376,29 @@ void abFree(struct abuf *ab) { free(ab->b); }
 
 /*** output ***/
 
+void editorScroll() {
+  /*!
+   * check if the cursor is above the visible window, if that's the case, scroll
+   * up to where the cursor is
+   */
+  if (E.cy < E.rowoff)
+    E.rowoff = E.cy;
+
+  /*!
+   * same thing with the bottom, scroll down, this has a little more complicated
+   * logic, since E.rowoff refers to what's at the top of the screen, we have to
+   * get the screen rows
+   */
+  if (E.cy >= E.rowoff + E.screenrows)
+    E.rowoff = E.cy - E.screenrows + 1;
+}
+
 void editorDrawRows(struct abuf *ab) {
   // draw the edges using the E struct for something dynamic
   for (int y = 0; y < E.screenrows; y++) {
-    if (y >= E.numrows) {
+    //
+    int filerow = y + E.rowoff;
+    if (filerow >= E.numrows) {
       if (E.numrows == 0 && y == E.screenrows / 3) {
         char welcome[80];
 
@@ -398,10 +419,10 @@ void editorDrawRows(struct abuf *ab) {
         abAppend(ab, "~", 1);
       }
     } else {
-      int len = E.row[y].size;
+      int len = E.row[filerow].size;
       if (len > E.screencols)
         len = E.screencols;
-      abAppend(ab, E.row[y].chars, len);
+      abAppend(ab, E.row[filerow].chars, len);
     }
 
     // clear each line
@@ -413,6 +434,8 @@ void editorDrawRows(struct abuf *ab) {
 }
 
 void editorRefreshScreen(void) {
+  editorScroll();
+
   /*
    * writes an escape sequence into the terminalwhich instruct the terminal to
    * do various things like coloring text or moving the cursor around or
@@ -467,7 +490,7 @@ void editorMoveCursor(int key) {
     }
     break;
   case ARROW_DOWN:
-    if (E.cy != E.screenrows - 1) {
+    if (E.cy < E.numrows) {
       E.cy++;
     }
     break;
@@ -522,6 +545,7 @@ void editorProcessKeypress(void) {
 void initEditor(void) {
   E.cx = 0;
   E.cy = 0;
+  E.rowoff = 0;
   E.numrows = 0;
   E.row = NULL;
 
