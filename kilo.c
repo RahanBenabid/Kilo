@@ -376,7 +376,7 @@ void abFree(struct abuf *ab) { free(ab->b); }
 
 /*** output ***/
 
-void editorScroll() {
+void editorScroll(void) {
   /*!
    * check if the cursor is above the visible window, if that's the case, scroll
    * up to where the cursor is
@@ -396,7 +396,7 @@ void editorScroll() {
 void editorDrawRows(struct abuf *ab) {
   // draw the edges using the E struct for something dynamic
   for (int y = 0; y < E.screenrows; y++) {
-    //
+    // to get the row of the file we want to display
     int filerow = y + E.rowoff;
     if (filerow >= E.numrows) {
       if (E.numrows == 0 && y == E.screenrows / 3) {
@@ -459,7 +459,7 @@ void editorRefreshScreen(void) {
 
   // move the cursor to the stored position
   char buf[32];
-  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1);
   abAppend(&ab, buf, strlen(buf));
 
   // re-diplay the cursor
@@ -490,9 +490,9 @@ void editorMoveCursor(int key) {
     }
     break;
   case ARROW_DOWN:
-    if (E.cy < E.numrows) {
+    if (E.cy < E.numrows)
       E.cy++;
-    }
+
     break;
   }
 }
@@ -500,8 +500,8 @@ void editorMoveCursor(int key) {
 /*
  * waits for a keypress then processes it later...
  *
- * we will map various ctrl key combinations or special keys to different editor
- * functions
+ * we will map various ctrl key combinations or special keys to different
+ * editor functions
  */
 void editorProcessKeypress(void) {
   int c = editorReadKey();
