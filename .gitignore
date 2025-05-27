@@ -84,9 +84,9 @@ DerivedData/
 .swiftpm/configuration/registries.json
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
-C/Text-Editor/kilo
+kilo
 Swift/Langtons-ant/.build
 test/
-C/Text-Editor/content.txt
+content.txt
 **/.nova
-C/Text-Editor/.clangd
+.clangd
