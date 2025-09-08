@@ -63,7 +63,7 @@ struct termios orig_termios;
 struct editorConfig {
   // coordinates of the cursor
   int cx, cy;
-  // for scrolling, init ar 0 which means we'll start at the top of the file
+  // for scrolling, init at 0 which means we'll start at the top of the file
   int rowoff;
   int screenrows;
   int screencols;
@@ -109,7 +109,8 @@ void enableRawMode(void) {
   if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1)
     die("tcgetattr");
 
-  /* called automatically when the program exits using `atexit()` this is to
+  /*
+   * called automatically when the program exits using `atexit()` this is to
    * make sure we store the original terminal attributes of the user
    */
   atexit(disableRawMode);
@@ -320,8 +321,22 @@ void editorOpen(char *filename) {
   char *line = NULL;
   size_t linecap = 0;
   ssize_t linelen;
+  /*
+   * the `getline()` function is super useful when we don't know how much memory
+   * we should allocate for each line, so it takes care of memory managment
+   *
+   * passing it a null line and linecap of 0 makes it allocate new memory for
+   * the next line it reads
+   *
+   * returns the length of the line it reads, or -1 if it's at the end of the
+   * file and there are no more file to read
+   */
   linelen = getline(&line, &linecap, fp);
   while ((linelen = getline(&line, &linecap, fp)) != -1) {
+    /*
+     * we strip the newline character, because we know each line ends with a
+     * newline, so there is no use keeping it
+     */
     while (linelen > 0 &&
            (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
       linelen--;
