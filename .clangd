@@ -1,0 +1,6 @@
+CompileFlags:
+	Add:
+		- "-Wall"
+		- "-Wextra"
+		- "-pedantic"
+		- "-std=c99"

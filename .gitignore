@@ -89,4 +89,3 @@ Swift/Langtons-ant/.build
 test/
 content.txt
 **/.nova
-.clangd

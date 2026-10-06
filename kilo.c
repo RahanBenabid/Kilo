@@ -21,6 +21,11 @@
 
 #define KILO_VERSION "0.0.1"
 
+/*
+ * a macro that does bitwise-AND with the value 00011111 (sets the last 3 bits
+ * to 0) which mirrors what the `Ctrl` key does, ASCII is designed like this on
+ * purpose ()
+ */
 #define CTRL_KEY(k) ((k) & 0x1f)
 
 /*
@@ -86,7 +91,7 @@ struct editorConfig E;
  * so when the other functions return -1 in failure, we call this function
  */
 void die(const char *s) {
-  // this for a clean exit in case of an error, same thing in the ctrl+q below
+  // for a clean exit in case of an error, same thing in the ctrl+q below
   write(STDOUT_FILENO, "\x1b[2J", 4);
   write(STDOUT_FILENO, "\x1b[H", 3);
 
@@ -99,8 +104,11 @@ void disableRawMode(void) {
     die("tcsetattr");
   }
   /*
-   * the TSCAFLUSH discards any unread uput
+   * the TSCAFLUSH discards any unread input
    * before applying the changes to the terminal
+   *
+   * and expects standard input to be a terminal, feeding the program a pipe
+   will cause it to fail
    */
 }
 
@@ -118,36 +126,47 @@ void enableRawMode(void) {
   struct termios raw = E.orig_termios;
   raw.c_iflag &= ~(BRKINT | INPCK | ISTRIP | ICRNL | IXON);
   /*
+   *  modify input flags
+   *
    * disable ctrl-s and ctrl-q
-   * this comes from termios.hm the I stands for input flag XON comes from names
-   * of the two control characters ctrl-s and ctrl-q produce
+   * this comes from termios.h the I stands for input flag XON comes from  the
+   * names of the two control characters ctrl-s and ctrl-q produce
    *
    * ICRNL diables ctrl-m, I stands for input flag
    * CT stands for carriage return
    * NL stands for new line
    *
-   * the other flags aren't really important but more for safety
+   * the other flags aren't really important for modern terminals but better be
+   * safe than sorry
    */
 
   raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
   /*
+   * modify local flag
+   *
+   * for the operation, we use bitwise NOT then bitwise AND
    * the ECHO feature causes each key to be printed in the terminal in here we
-   * turn it off this is the same as when typing a password after using `sudo`
-   * in the terminal
+   * used by programs like `sudo`
    *
    * we also turn off canonical mode, to be able to read input byte-by-byte now
    * the program quits as soon as you press `q`
    *
-   * to disable ctrl-c and ctrl-z and ctrl-y we use ISIG
+   * ISIG is to disable ctrl-c and ctrl-z and ctrl-y
    *
    * IEXTEN  diables ctrl-v and fixes ctrl-o
    */
 
   raw.c_oflag &= ~(OPOST);
+  /*
+   * modify output flag
+   *
+   * in this case we only have the case where it translates a "\n" into a "\r\n"
+   * like old typewriters
+   */
 
   raw.c_cflag |= (CS8);
   /*
-   * this ain't a flag but more of of mask with multiple bits that we set using
+   * this isn't a flag but more of a mask with multiple bits that we set using
    * the bitwise OR, it sets the character size to be 8 bits per byte, which is
    * already the case for most systems
    */
@@ -161,11 +180,16 @@ void enableRawMode(void) {
 
   raw.c_cc[VTIME] = 1;
   /*
-   * read() returns as soon as there is any input to be read
+   * The maximum time to wait for input before read() returns,
+   * measured in tenths of a second (1 = 100 milliseconds timeout).
    */
 
   if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1)
     die("tcsetattr");
+  /*
+   * Apply changes after all pending output is written, and discard any
+   * unread input
+   */
 }
 
 /*
@@ -174,10 +198,17 @@ void enableRawMode(void) {
 int editorReadKey(void) {
   int nread;
   char c;
+  // wait for keypress
   while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+    /*
+     * If it's a real failure, crash. If it just timed out because the user
+     * hasn't pressed a key yet, ignore it and keep trying
+     */
     if (nread == -1 && errno != EAGAIN)
       die("read");
   }
+
+  // we detect an escape character
   if (c == '\x1b') {
     char seq[3];
     if (read(STDIN_FILENO, &seq[0], 1) != 1)
@@ -192,6 +223,7 @@ int editorReadKey(void) {
         if (seq[2] == '~') {
           switch (seq[1]) {
           case '1':
+            // \x1b[1~
             return HOME_KEY;
           case '3':
             return DEL_KEY;
@@ -232,8 +264,10 @@ int editorReadKey(void) {
       }
     }
 
+    // not an escape sequence we recognize, return a normal escape press
     return '\x1b';
   } else {
+    // return the character that was pressed
     return c;
   }
 }
@@ -243,14 +277,16 @@ int getCursorPosition(int *rows, int *cols) {
   unsigned int i = 0;
 
   /*
-   * ask the terminal for the cursor position
-   *
-   * the terminal will repond with an escape sequence such as \x1b[24;80R, where
-   * 24 is the row number and 80 is the column number
+   * ask the terminal for the cursor coordinates by sending the query "\x1b[6n",
+   * via stdout, the terminal emulator parses them, creates the coordinates
+   * (e.g.
+   * "\x1b[24;80R") and injects them into the stdin through the pseudo-terminal
+   * master device thanks to the OS, which will be read later using `read()`
    */
   if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4)
     return -1;
 
+  // put the previously returned value inside a buffer for parsing later
   while (i < sizeof(buf) - 1) {
     if (read(STDIN_FILENO, &buf[i], 1) != 1)
       break;
@@ -260,31 +296,38 @@ int getCursorPosition(int *rows, int *cols) {
   }
   buf[i] = '\0';
 
+  // we make sure out buffer holds an escape sequence
+  if (buf[0] != '\x1b' || buf[1] != '[')
+    return -1;
   /*
-   * parse the two number using sscanf()
-   * we make sure it responded with an escape sequence
+   * parse the two number using `sscanf()`
    * we pass a pointer to the third character to skip '\x1b['
    * then we parse to integers separated by a `;` and put them into rows and
    * cols
    */
-  if (buf[0] != '\x1b' || buf[1] != '[')
-    return -1;
   if (sscanf(&buf[2], "%d;%d", rows, cols) != 2)
     return -1;
 
   return 0;
 }
 
+/*
+ * returns multiple values (pass values by int references) and the return code
+ * for error handling later this is a common pattern in C
+ */
 int getWindowSize(int *rows, int *cols) {
   struct winsize ws;
 
   /*
+   * the operation inside the if is both an affectation and a test
+   *
    * error return with the code -1
    * check when values aren't 0 so it doesn't create an error on success, we
    * pass the values back by setting the int references that were passed to the
    * function
    */
   if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+    // (fallback method) move the cursor to bottom right and get coordinates
     if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12)
       return -1;
     return getCursorPosition(rows, cols);
@@ -364,17 +407,13 @@ struct abuf {
 /*
  * we use realloc to make sure enough memory to available to hold the new string
  *
- * realloc will give us a block of memory the size of the current string plus
- * the new string we are just appending
+ * realloc either extends the size of the memory block or allocates a new one
+ * somewhere else in the heap
  *
- * so it will either extend the current size of the block of memory or will take
- * care of freeing the current block and allocating a new one elsewhere that is
- * big enough for the new string
+ * then we use a memcpy to copy the string s after the end of the current `new`
+ * buffer
  *
- * then we use a memcpy to copy the string s after the end of the current data
- * in the buffer
- *
- * we then update the pointer and length of the abuf using the new values
+ * then we update the pointer and length of the abuf using the new values
  */
 void abAppend(struct abuf *ab, const char *s, int len) {
   char *new = realloc(ab->b, ab->len + len);
@@ -386,7 +425,7 @@ void abAppend(struct abuf *ab, const char *s, int len) {
   ab->len += len;
 }
 
-// acts like a destructor to deallocate the dyn-mem used by abuf
+// acts like a destructor to deallocate the dynamic memory used by abuf
 void abFree(struct abuf *ab) { free(ab->b); }
 
 /*** output ***/
@@ -413,30 +452,39 @@ void editorDrawRows(struct abuf *ab) {
   for (int y = 0; y < E.screenrows; y++) {
     // to get the row of the file we want to display
     int filerow = y + E.rowoff;
+
     if (filerow >= E.numrows) {
+      // welcome message
       if (E.numrows == 0 && y == E.screenrows / 3) {
         char welcome[80];
 
         // `snprintf` is better for formatting buffers for later use
         int welcomelen = snprintf(welcome, sizeof(welcome),
                                   "Kilo editor -- version %s", KILO_VERSION);
+
         if (welcomelen > E.screencols)
           welcomelen = E.screencols;
+
         int padding = (E.screencols - welcomelen) / 2;
+
         if (padding) {
           abAppend(ab, "~", 1);
           padding--;
         }
+
         while (padding--)
           abAppend(ab, " ", 1);
+
         abAppend(ab, welcome, welcomelen);
       } else {
         abAppend(ab, "~", 1);
       }
     } else {
       int len = E.row[filerow].size;
+
       if (len > E.screencols)
         len = E.screencols;
+
       abAppend(ab, E.row[filerow].chars, len);
     }
 
@@ -452,7 +500,7 @@ void editorRefreshScreen(void) {
   editorScroll();
 
   /*
-   * writes an escape sequence into the terminalwhich instruct the terminal to
+   * writes an escape sequence into the terminal which instruct the terminal to
    * do various things like coloring text or moving the cursor around or
    * clearing parts of the screen
    */
@@ -463,21 +511,25 @@ void editorRefreshScreen(void) {
    * there could be a possible flicker effect when trying to draw the scene, the
    * cursor might appear in the middle of the screen for a split second while
    * the terminal is drawing to the screen so we hide the cursor before
-   * refereshing the screen then display it again
+   * refreshing the screen then display it again
    * the `h` and `l` commands are for set and reset mode
    */
   abAppend(&ab, "\x1b[?25l", 6);
-  // put the cursor back at the top of the screen
+
+  // put the cursor back at the top leftmost of the screen
   abAppend(&ab, "\x1b[H", 3);
 
   editorDrawRows(&ab);
 
-  // move the cursor to the stored position
+  /*
+   * move back the cursor to the stored position by constructing our own escape
+   * sequence then applying it (puts the cursor in the given position)
+   */
   char buf[32];
   snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1);
   abAppend(&ab, buf, strlen(buf));
 
-  // re-diplay the cursor
+  // re-display the cursor
   abAppend(&ab, "\x1b[?25h", 6);
 
   // write the buffer's contents our to standard output & free memory
@@ -584,3 +636,6 @@ int main(int argc, char *argv[]) {
 }
 
 // source https://viewsourcecode.org/snaptoken/kilo/04.aTextViewer.html
+/*
+ * TODO: add blinking using an event loop (poll api)
+ */
