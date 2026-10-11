@@ -365,19 +365,20 @@ void editorOpen(char *filename) {
   size_t linecap = 0;
   ssize_t linelen;
   /*
-   * the `getline()` function is super useful when we don't know how much memory
-   * we should allocate for each line, so it takes care of memory managment
+   * the `getline()` function is useful when we don't know how much memory
+   * we should allocate for each line, so it takes care of mem management
    *
-   * passing it a null line and linecap of 0 makes it allocate new memory for
+   * passing it a NULL line and linecap of 0 makes it allocate new memory for
    * the next line it reads
    *
    * returns the length of the line it reads, or -1 if it's at the end of the
    * file and there are no more file to read
    */
-  linelen = getline(&line, &linecap, fp);
+
+  // continuously read the file line by line until we reach the EOF
   while ((linelen = getline(&line, &linecap, fp)) != -1) {
     /*
-     * we strip the newline character, because we know each line ends with a
+     * strip the newline character, because we know each line ends with a
      * newline, so there is no use keeping it
      */
     while (linelen > 0 &&
@@ -420,6 +421,7 @@ void abAppend(struct abuf *ab, const char *s, int len) {
 
   if (new == NULL)
     return;
+
   memcpy(&new[ab->len], s, len);
   ab->b = new;
   ab->len += len;
@@ -431,20 +433,61 @@ void abFree(struct abuf *ab) { free(ab->b); }
 /*** output ***/
 
 void editorScroll(void) {
-  /*!
-   * check if the cursor is above the visible window, if that's the case, scroll
-   * up to where the cursor is
+  /*
+   * check if the cursor is above the visible window, if so, scroll up to where
+   * the cursor is
    */
   if (E.cy < E.rowoff)
     E.rowoff = E.cy;
 
-  /*!
+  /*
    * same thing with the bottom, scroll down, this has a little more complicated
    * logic, since E.rowoff refers to what's at the top of the screen, we have to
    * get the screen rows
    */
   if (E.cy >= E.rowoff + E.screenrows)
     E.rowoff = E.cy - E.screenrows + 1;
+}
+
+void drawWelcomeMessage(struct abuf *ab) {
+  char welcome[80];
+  int welcomelen = snprintf(welcome, sizeof(welcome),
+                            "Kilo editor -- version %s", KILO_VERSION);
+  if (welcomelen > E.screencols)
+    welcomelen = E.screencols;
+
+  int padding = (E.screencols - welcomelen) / 2;
+  if (padding) {
+    abAppend(ab, "~", 1);
+    padding--;
+  }
+  while (padding--)
+    abAppend(ab, " ", 1);
+
+  abAppend(ab, welcome, welcomelen);
+}
+
+void editorDrawWelcomeMessage(struct abuf *ab) {
+  char welcome[80];
+
+  // `snprintf` is good for formatting buffers
+  int welcomelen = snprintf(welcome, sizeof(welcome),
+                            "Kilo editor -- version %s", KILO_VERSION);
+
+  if (welcomelen > E.screencols)
+    welcomelen = E.screencols;
+
+  int padding = (E.screencols - welcomelen) / 2;
+
+  if (padding) {
+    abAppend(ab, "~", 1);
+    padding--;
+  }
+
+  while (padding--)
+    abAppend(ab, " ", 1);
+
+  abAppend(ab, welcome, welcomelen);
 }
 
 void editorDrawRows(struct abuf *ab) {
@@ -456,35 +499,14 @@ void editorDrawRows(struct abuf *ab) {
     if (filerow >= E.numrows) {
       // welcome message
       if (E.numrows == 0 && y == E.screenrows / 3) {
-        char welcome[80];
-
-        // `snprintf` is better for formatting buffers for later use
-        int welcomelen = snprintf(welcome, sizeof(welcome),
-                                  "Kilo editor -- version %s", KILO_VERSION);
-
-        if (welcomelen > E.screencols)
-          welcomelen = E.screencols;
-
-        int padding = (E.screencols - welcomelen) / 2;
-
-        if (padding) {
-          abAppend(ab, "~", 1);
-          padding--;
-        }
-
-        while (padding--)
-          abAppend(ab, " ", 1);
-
-        abAppend(ab, welcome, welcomelen);
+        editorDrawWelcomeMessage(ab);
       } else {
         abAppend(ab, "~", 1);
       }
     } else {
       int len = E.row[filerow].size;
-
       if (len > E.screencols)
         len = E.screencols;
-
       abAppend(ab, E.row[filerow].chars, len);
     }
 
@@ -498,12 +520,6 @@ void editorDrawRows(struct abuf *ab) {
 
 void editorRefreshScreen(void) {
   editorScroll();
-
-  /*
-   * writes an escape sequence into the terminal which instruct the terminal to
-   * do various things like coloring text or moving the cursor around or
-   * clearing parts of the screen
-   */
 
   struct abuf ab = ABUF_INIT;
 
@@ -542,24 +558,20 @@ void editorRefreshScreen(void) {
 void editorMoveCursor(int key) {
   switch (key) {
   case ARROW_LEFT:
-    if (E.cx != 0) {
+    if (E.cx != 0)
       E.cx--;
-    }
     break;
   case ARROW_RIGHT:
-    if (E.cx != E.screencols - 1) {
+    if (E.cx != E.screencols - 1)
       E.cx++;
-    }
     break;
   case ARROW_UP:
-    if (E.cy != 0) {
+    if (E.cy != 0)
       E.cy--;
-    }
     break;
   case ARROW_DOWN:
     if (E.cy < E.numrows)
       E.cy++;
-
     break;
   }
 }
@@ -635,7 +647,12 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
-// source https://viewsourcecode.org/snaptoken/kilo/04.aTextViewer.html
+// source https://viewsourcecode.org/snaptoken/kilo/
 /*
- * TODO: add blinking using an event loop (poll api)
+ * TODO:
+ * - add blinking using an event loop (poll api) for text blinking and other
+ * stuff
+ * - handle forced shutdown (if the code gets stuck anywhere that's not waiting
+ * for a keystroke, the user can't exit the editor unless he closes the window
+ * or kills the process in another window)
  */
