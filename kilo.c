@@ -6,6 +6,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,6 +56,8 @@ struct editorConfig {
   int numrows;
   erow *row;
   char *filename;
+  char statusmsg[80];
+  time_t statusmsg_time;
   struct termios orig_termios;
 };
 
@@ -417,6 +420,16 @@ void editorDrawStatusBar(struct abuf *ab) {
   }
 
   abAppend(ab, "\x1b[m", 3);
+  abAppend(ab, "\r\n", 2);
+}
+
+void editorDrawMessageBar(struct abuf *ab) {
+  abAppend(ab, "\x1b[K", 3);
+  int msglen = strlen(E.statusmsg);
+  if (msglen > E.screencols)
+    msglen = E.screencols;
+  if (msglen && time(NULL) - E.statusmsg_time < 5)
+    abAppend(ab, E.statusmsg, msglen);
 }
 
 void editorRefreshScreen(void) {
@@ -436,6 +449,9 @@ void editorRefreshScreen(void) {
   // add the status bar to the abuffer
   editorDrawStatusBar(&ab);
 
+  // add the status message to the abuffer
+  editorDrawMessageBar(&ab);
+
   // put the cursor back where it was
   char buf[32];
   snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1,
@@ -448,6 +464,14 @@ void editorRefreshScreen(void) {
   // finally render, write the whole buffer into the screen
   write(STDOUT_FILENO, ab.b, ab.len);
   abFree(&ab);
+}
+
+void editorSetStatusMessage(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap);
+  va_end(ap);
+  E.statusmsg_time = time(NULL);
 }
 
 /*** input ***/
@@ -541,11 +565,13 @@ void initEditor(void) {
   E.numrows = 0;
   E.row = NULL;
   E.filename = NULL;
+  E.statusmsg[0] = '\0';
+  E.statusmsg_time = 0;
 
   if (getWindowSize(&E.screenrows, &E.screencols) == -1)
     die("getWindowSize");
 
-  E.screenrows -= 1;
+  E.screenrows -= 2;
 }
 
 int main(int argc, char *argv[]) {
@@ -554,6 +580,8 @@ int main(int argc, char *argv[]) {
   if (argc >= 2) {
     editorOpen(argv[1]);
   }
+
+  editorSetStatusMessage("HELP: Ctrl-Q = quit");
 
   while (1) {
     editorRefreshScreen();
@@ -566,10 +594,13 @@ int main(int argc, char *argv[]) {
 /*
  * TODO:
  * - add blinking using an event loop (poll api) for text blinking and other
- * stuff
+ * stuff (also update the status message with the poll)
  * - handle forced shutdown (if the code gets stuck anywhere that's not
  * waiting for a keystroke, the user can't exit the editor unless he closes
  * the window or kills the process in another window)
  * - better handling for going up and down in lines where tabs exists and in
  * other it doesn't
+ *
+ * - another way to quit (maybe double ctrl-c to kill the process in case it
+ * gets stuck in a while loop)
  */
