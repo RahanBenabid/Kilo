@@ -116,6 +116,8 @@ void enableRawMode(void) {
 int editorReadKey(void) {
   int nread;
   char c;
+
+  // the program sleeps here until a keypress is read
   while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
     if (nread == -1 && errno != EAGAIN)
       die("read");
@@ -470,26 +472,39 @@ void editorFindCallback(char *query, int key) {
   static int last_match = -1;
   static int direction = 1;
 
-  if (key == '\r' || key == '\x1b') {
+  switch (key) {
+  case ARROW_RIGHT:
+  case ARROW_DOWN:
+    direction = 1;
+    break;
+
+  case ARROW_LEFT:
+  case ARROW_UP:
+    direction = -1;
+    break;
+
+  case '\r':
+  case '\x1b':
     last_match = -1;
     direction = 1;
     return;
-  } else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
-    direction = 1;
-  } else if (key == ARROW_LEFT || key == ARROW_UP) {
-    direction = -1;
-  } else {
+    break;
+
+  default:
     last_match = -1;
     direction = 1;
+    break;
   }
 
   if (last_match == -1)
     direction = 1;
+
   int current = last_match;
 
   for (int i = 0; i < E.numrows; i++) {
 
     current += direction;
+
     if (current == -1)
       current = E.numrows - 1;
     else if (current == E.numrows)
@@ -505,8 +520,6 @@ void editorFindCallback(char *query, int key) {
       break;
     }
   }
-
-  free(query);
 }
 
 void editorFind(void) {
@@ -716,22 +729,7 @@ char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
     int c = editorReadKey();
 
     switch (c) {
-    case DEL_KEY:
-    case CTRL_KEY('h'):
-    case BACKSPACE:
-      if (buflen != 0)
-        buf[--buflen] = '\0';
-      break;
-
-    case '\x1b':
-      editorSetStatusMessage("");
-      if (callback)
-        callback(buf, c);
-      free(buf);
-      return NULL;
-      break;
-
-    case '\r':
+    case '\r': // on enter
       if (buflen != 0) {
         editorSetStatusMessage("");
         if (callback)
@@ -740,7 +738,22 @@ char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
       }
       break;
 
-    default:
+    case '\x1b': // on escape
+      editorSetStatusMessage("");
+      if (callback)
+        callback(buf, c);
+      free(buf);
+      return NULL;
+      break;
+
+    case DEL_KEY: // on delete
+    case CTRL_KEY('h'):
+    case BACKSPACE:
+      if (buflen != 0)
+        buf[--buflen] = '\0';
+      break;
+
+    default: // on insert character
       if (!iscntrl(c) && c < 128) {
         if (buflen == bufsize - 1) {
           bufsize *= 2;
